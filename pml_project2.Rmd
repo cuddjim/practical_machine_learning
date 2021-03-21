@@ -1,0 +1,124 @@
+---
+title: "PML Project"
+author: "Jimmy Cuddihy"
+date: "12/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE, cache=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse);library(formattable);library(caret);library(magrittr)
+```
+
+**Background**
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. The goal of this analysis is be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the  [groupware website](http://groupware.les.inf.puc-rio.br/har).
+
+**Data exploration**
+
+We start by loading the required sets
+
+```{r data}
+
+# load training set
+training = read.csv('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv', na.strings = c("",NA,"#DIV/0!"))
+
+# convert target to factor
+training %<>% mutate(classe = as.factor(classe))
+
+# load test set
+validation = read.csv('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv', na.strings = c("",NA,"#DIV/0!"))
+
+```
+
+We then examine the data
+```{r explore}
+
+map(list(training,validation),dim)
+
+# We see that the training set contains 19622 observations of 160 variables, while the validation containts 20 observations of the same variables.
+
+# Below we can see there a number of variables with a large amount of missing values
+data.frame(na_pct = percent(colSums(is.na(training))/length(training[,1]),1)) %>% 
+    mutate(na_greater_90_percent = case_when(na_pct>.9~'yes',TRUE~'no')) %>% count(na_greater_90_percent)
+
+# We reduce the set to exclude those variables, as well as ID and timestamp vectors which will not add value to the analysis.
+train_clean = training %>% purrr::discard(~sum(is.na(.x))/length(.x)* 100 >=90) %>% select(-c(1:7))
+dim(train_clean)
+
+# we reduce the validation set to the same variables
+val_clean = validation %>% select(names(train_clean)[-53]) ## [-53] to remove the classe (our target variable)
+dim(val_clean)
+
+```
+
+split training set into training and testing, add k-fold cross validation
+```{r kfold}
+
+set.seed(3333)
+in_train = createDataPartition(train_clean$classe, p = 0.7, list = F)
+train_final = train_clean[in_train,]
+test_final = train_clean[-in_train,]
+dim(train_final)
+
+# split data into 5 folds, repeat 3 times. The accuracy number will be an average of the 15 runs per model
+train_control = trainControl(method = 'repeatedcv', number = 5, repeats = 3)
+```
+
+CART model
+```{r CART}
+mod_cart = train(classe~.,method = 'rpart', data = train_final, trControl = train_control)
+rattle::fancyRpartPlot(mod_cart$finalModel)
+predict_cart = predict(mod_cart,newdata = test_final)
+cart_cm = caret::confusionMatrix(test_final$classe,predict_cart)
+
+# prediction table
+cart_cm$table
+#overall accuracy
+percent(cart_cm$overall[1])
+```
+
+Boosting
+```{r gbm}
+
+mod_gbm = train(classe~.,method = 'gbm', data = train_final, verbose = F, tuneLength = 5) ## my computer cant handle the cross validation of train_control, ran without CV and default settings
+
+# show ideal tree depth
+plot(mod_gbm)
+
+predict_gbm = predict(mod_gbm,newdata = test_final)
+gbm_cm = caret::confusionMatrix(test_final$classe,predict_gbm)
+
+# prediction table
+gbm_cm$table
+#overall accuracy
+percent(gbm_cm$overall[1])
+```
+
+Random Forest model - Insufficient processing power to run this; including as example
+```{r rf, results=F}
+### Not run: don't have the computational power to run this
+# control_rf <- trainControl(method="cv", number=3, verboseIter=F)
+# mod_rf = train(classe~.,method = 'rf', data = train_final, tuneLength = 5) ## my computer cant handle the cross validation of train_control, ran without CV and default settings
+
+# predict_rf = predict(mod_rf,newdata = test_final)
+# rf_cm = caret::confusionMatrix(test_final$classe,predict_rf)
+
+# prediction table
+# rf_cm$table
+#overall accuracy
+# percent(rf_cm$overall[1])
+```
+
+The boosting model with an interaction depth of 5 gave an accuracy of 99.12%. We will therefore use this to predict the class of the samples in the validation set. 
+
+Validation results
+```{r results}
+## these will be used for the final quiz
+validation_results = predict(mod_gbm, val_clean)
+validation_results
+
+```
+
+
+
